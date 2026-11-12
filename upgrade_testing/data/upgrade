@@ -317,10 +317,39 @@ function do_upgrade_and_maybe_reboot() {
 }
 
 
+function ensure_static_resolv_conf() {
+    # ubuntu-release-upgrader disables the systemd-resolved stub listener on
+    # jammy->noble (LP: #2043820), so daemons still using 127.0.0.53 fail to
+    # resolve and stall snap pre-install scripts. Point /etc/resolv.conf at
+    # the upstream resolvers instead.
+    local upstream="/run/systemd/resolve/resolv.conf"
+
+    if ! [ -L /etc/resolv.conf ] ||
+        ! readlink -f /etc/resolv.conf | grep -q '^/run/systemd/resolve/'; then
+        return
+    fi
+
+    # Upstream resolvers are only populated once the network is up.
+    for _ in $(seq 30); do
+        grep -q '^nameserver ' "${upstream}" 2>/dev/null && break
+        sleep 1
+    done
+
+    if ! grep -q '^nameserver ' "${upstream}" 2>/dev/null; then
+        upgrade_log "WARNING: no upstream resolvers found, leaving /etc/resolv.conf as is."
+        return
+    fi
+
+    upgrade_log "Replacing /etc/resolv.conf stub symlink with static upstream resolvers."
+    cp "${upstream}" /etc/resolv.conf.upgrade-testing
+    mv -f /etc/resolv.conf.upgrade-testing /etc/resolv.conf
+}
+
 function do_normal_upgrade() {
     upgrade_log "Starting machine upgrade."
 
     export DEBIAN_FRONTEND=noninteractive
+    ensure_static_resolv_conf
     # Ensure we have do-release-upgrade
     apt-get update
     apt-get -y dist-upgrade
